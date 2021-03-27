@@ -1,0 +1,133 @@
+#!/bin/bash
+priv=$(id -u)
+if [[ $priv == 0 ]]
+        then echo Installatiescript start
+else
+        echo Je moet root zijn
+        exit
+fi
+
+## Aanpassing aan de sshd_config
+## Maak eerst een backup
+cp /etc/ssh/sshd_config /etc/ssh/sshd_config-bak
+
+## Geen root via ssh
+editfile=$(echo /etc/ssh/sshd_config)
+stringchange=$(echo PermitRootLogin)
+stringbefore=$(grep ^PermitRootLogin /etc/ssh/sshd_config | awk '{ print $2 }')
+stringafter=$(echo no)
+if ! grep "^$stringchange $stringafter" $editfile >/dev/null
+        then sed -i /^$stringchange/s/$stringbefore/$stringafter/ $editfile
+        if ! grep "$stringchange $stringafter" $editfile >/dev/null
+                then
+                echo "Let op! Er is geen wijziging gemaakt!"
+        else
+                echo "SSH is gesloten voor root."
+        fi
+else
+        echo SSH is al gesloten voor root.
+fi
+
+## Op maat gemaakte boodschap bij terminal login
+editfile=$(echo /etc/ssh/sshd_config)
+issuessh=$(echo /etc/issue-ssh)
+stringbefore=$(grep ^#Banner $editfile)
+stringafter=$(echo Banner $issuessh)
+if ! grep "^$stringafter" $editfile >/dev/null
+        then sed -i "/^$stringbefore/c\\$stringafter" $editfile
+        if [[ $? == 0 ]]
+        then    
+                echo "Console loginbanner is actief"
+        else
+                echo "Let op! Er is geen wijziging gemaakt!"
+        fi
+else
+        echo De console loginbanner was al actief.
+fi
+
+######
+> $issuessh
+echo >>$issuessh
+echo '                           ,,'>> $issuessh
+echo '  .g8"""bgd               `7MM'>> $issuessh
+echo '.dP`     `M                 MM'>> $issuessh
+echo 'dM"       `  ,6"Yb.    ,M""bMM  `7Mb,od8  ,6"Yb.'>> $issuessh
+echo 'MM          8)   MM  ,AP    MM    MM` "` 8)   MM'>> $issuessh
+echo 'MM.          ,pm9MM  8MI    MM    MM      ,pm9MM'>> $issuessh
+echo '`Mb.     ,` 8M   MM  `Mb    MM    MM     8M   MM'>> $issuessh
+echo '  `"bmmmd`  `Moo9^Yo. `Wbmd"MML..JMML.   `Moo9^Yo.'>> $issuessh
+echo Terminal verbinding.>> $issuessh
+echo >>$issuessh
+######
+
+# Console aanvulling met aantal gebruikers dat nu is ingelogt
+echo '\S '> /etc/issue
+echo 'Kernel \r on an \m'>> /etc/issue
+echo '\t - \U logged in.'>> /etc/issue
+echo >> /etc/issue
+
+######
+
+
+
+
+## Reset sudoers file
+cp /etc/sudoers /etc/sudoers-bak
+chmod +w /etc/sudoers
+datumentijd=$(date)
+echo "## Aangemaakt op $datumentijd" >/etc/sudoers
+echo "root    ALL=(ALL)       ALL" >>/etc/sudoers
+echo "%linops  ALL=(ALL)       ALL" >>/etc/sudoers
+chmod -w /etc/sudoers
+
+## Creating linops group and my account
+groupadd -g 1001 linops
+userid=$(echo sigurd) ; uid=$(echo 1000) ; gecos=$(echo Linux OPS) ; useradd $userid -c "$gecos" -u $uid -G linops -d /home/$userid -s /bin/bash ; echo $userid | passwd --stdin $userid ; passwd --expire $userid
+
+
+## Adding linops to the /etc/security/access.conf
+cp /etc/security/access.conf /etc/security/access.conf-bak
+datumentijd=$(date)
+echo "## Aangemaakt op $datumentijd" >/etc/security/access.conf
+echo "" >>/etc/security/access.conf
+echo "## Toegang toestaan LDAP accounts" >>/etc/security/access.conf
+echo "" >>/etc/security/access.conf
+echo "" >>/etc/security/access.conf
+echo "## Toegang toestaan lokale accounts" >>/etc/security/access.conf
+echo "+:%linops" >>/etc/security/access.conf
+echo "" >>/etc/security/access.conf
+echo "" >>/etc/security/access.conf
+echo "## Root heeft toegang, de rest heeft geen toegang." >>/etc/security/access.conf
+echo "-:root:ALL" >>/etc/security/access.conf
+echo "-:ALL:ALL" >>/etc/security/access.conf
+
+## Web beheer inschakelen
+echo Activeren cockpit op $HOSTNAME
+systemctl enable --now cockpit.socket -q >/dev/null
+if [[ $? == 0 ]]
+        then echo "Cockpit geactiveerd"
+else
+        echo "Controleer de Cockpit.socket service!"
+fi
+systemctl start cockpit.socket
+if [[ $? == 0 ]]
+        then echo "Cockpit opgestart"
+else
+        echo "Cockpit.socket service is niet gestart!"
+fi
+
+crondoel=$(echo /var/spool/cron/root)
+yes | cp /etc/crontab $crondoel
+
+echo "# Update alleen de package list met de laatste versie, maar installeert of update geen software" >>$crondoel
+echo "0  2  *  *  7 root /usr/bin/dnf update -q -y" >>$crondoel
+
+echo "# Upgrade installeert daadwerkelijk de opgehaalde updates" >>$crondoel
+echo "0  3  *  *  7 root /usr/bin/dnf upgrade -q -y" >>$crondoel
+
+
+
+echo
+echo == Verander het root wachtwoord! ==
+echo -- En reboot deze server direct! --
+echo
