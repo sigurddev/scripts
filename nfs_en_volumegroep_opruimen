@@ -1,0 +1,33 @@
+#!/bin/bash
+# v1.01 20201228
+#
+
+umount /nfs/rear
+umount /nfs/config
+umount /nfs/homedirs
+umount /nfs/install
+
+firewall-cmd --permanent --remove-service=nfs
+firewall-cmd --permanent --remove-service=rpc-bind
+firewall-cmd --permanent --remove-service=mountd
+firewall-cmd --reload
+
+systemctl stop nfs-server.service
+systemctl disable nfs-server.service
+
+for i in rear config homedirs install
+do
+        umount -l /nfs/$i
+        yes | lvremove /dev/mapper/vgl_nfs-lvl_nfs_$i
+done
+yes | vgremove vgl_nfs
+pvremove /dev/sdb
+rm -rf /nfs
+rm -rf /etc/exports.d/xprt_bff_init
+origtab=$(ls -alhtr /etc/fstab-* | tail -n 1 | awk '{ print $9 }'); yes | cp -r $origtab /etc/fstab
+rm -f /etc/exports
+rm -f /install/fstab-clientuse
+cat /etc/fstab
+
+
+
