@@ -7,348 +7,193 @@ domein=$(echo hive.cadra.eu)
 datumtijd=$(date +%Y%m%d_%H%M%S)
 devicepad=$1
 
-lastdisk=$(lsblk | grep disk | tail -n 1 | awk '{ print $1 }')
 
-if [ $# -eq 0 ]
-  then
-  echo Mist een parameter.
-  echo Voorbeeld: "$0 /dev/$lastdisk"
-  exit
+lastdisk=$(lsblk | grep disk | tail -n 1 | awk '{ print $1 }')
+if [ $# -eq 0 ] ;then
+echo Mist een parameter.
+echo Voorbeeld: "$0 /dev/$lastdisk"
+exit
 fi
+
 
 rpm -qa | grep nfs-utils >/dev/null
-
 if [ ! $? = 0 ]
-  then
-  echo dnf install nfs-utils -y
-  echo dnf install nfs4-acl-tools -y
-
-exit
+        then
+                echo dnf install nfs-utils -y
+                echo dnf install nfs4-acl-tools -y
+                exit
 fi
 
-rpm -qa | grep nfs4-acl-tools >/dev/null 
-
+rpm -qa | grep nfs4-acl-tools >/dev/null
 if [ ! $? = 0 ]
-  then
-  echo dnf install nfs4-acl-tools -y 
-exit
+        then
+                echo dnf install nfs4-acl-tools -y
+                exit
 fi
 
 systemctl status nfs-server >/dev/null
-
 if [ $? = 3 ]
-then 
-  echo NFS server is nog niet actief. Wordt nu geactiveerd. 
-  systemctl enable nfs-server.service 2>/dev/null 
-  systemctl start nfs-server.service 2>/dev/null 
+then
+        echo NFS server is nog niet actief. Wordt nu geactiveerd.
+        systemctl enable nfs-server.service 2>/dev/null
+        systemctl start nfs-server.service 2>/dev/null
+#        firewall-cmd -q --permanent --add-service={nfs,nfs3,mountd,rpc-bind} 2>/dev/null
+        firewall-cmd -q --permanent --add-service={nfs,mountd,rpc-bind} 2>/dev/null
+        firewall-cmd -q --reload 2>/dev/null
+        if [ $? = 0 ]
+        then
+                echo NFS server is enabled en opgestart.
+        else
+                echo
+                echo Fout bij instellen NFS. Installeer eerst NFS packages:
+                echo dnf install nfs-utils -y   
+                echo dnf install nfs4-acl-tools -y
+                echo
+                exit
+        fi
+fi
 
-#        firewall-cmd -q --permanent --add-service={nfs,nfs3,mountd,rpc-bind} 2>/dev/null 
-firewall-cmd -q --permanent --add-service={nfs,mountd,rpc-bind} 2>/dev/null 
-firewall-cmd -q --reload 2>/dev/null 
+
+if [ ! -e $1 ]; then
+echo
+echo Apparaat $devicepad bestaat niet. Het laatste apparaat is /dev/$lastdisk.
+echo Hieronder vind je het overzicht:
+lsblk | grep disk
+echo
+echo Als de drive niet zichtbaar is, copy paste dan onderstaand en anders herstarten:
+echo 'for BUS in $(ls -1 /sys/bus/scsi/devices/ | grep "^[0-9]") ; do echo -n "BUS: $BUS : " ; echo 1 > /sys/bus/scsi/devices/$BUS/rescan ;echo "...gescand!" ; done'
+echo
+exit
+fi
+
+
+########################
+pvcreate $devicepad >/dev/null
+########################
+echo ---
+if [ $? = 0 ]
+then
+        echo Apparaat $devicepad is toegevoegd als blockdevice aan LVM
+else
+        echo Fout bij toevoegen $devicepad aan LVM
+        exit
+fi
+
+####################################
+# Aanmaken volumegroup en mountpoint
+####################################
+echo ---
+vglnaam=$(echo nfs)
+volgroepnaam=$(echo vgl_$vglnaam)
+
+vgcreate $volgroepnaam $devicepad >/dev/null
+if [ $? = 0 ]
+then
+        echo Volumegroup $volgroepnaam aangemaakt met $devicepad als fysieke disk
+else
+        echo Fout bij toevoegen $devicepad aan volumegroup $volgroepnaam
+        exit
+fi
+
+mkdir /$vglnaam
+if [ $? = 0 ]
+then
+        echo Mountpoint root directory /$vglnaam is aangemaakt
+else
+        echo Fout bij het aanmaken van directory /$vglnaam
+fi
+## Backup fstab
+cp -p /etc/fstab /etc/fstab-$datumtijd
+
+###################################################
+# Loop maakt filesystemen en subdirs mountpoint aan
+###################################################
+filesystemen=$(echo rear config homedirs install)
+vg_rear=$(echo 20%VG)
+vg_config=$(echo 20%VG)
+vg_homedirs=$(echo 10%VG)
+vg_install=$(echo 10%VG)
+xprts=$(echo /etc/exports)
+fstabex=$(echo /install/fstab-clientuse) #Dit is voor de fstab van NFS clients
+nfsclientfstab=$(echo /nfs/install/nfsclient/fstab-addon) #Voor NFS clients
+t=0
+
+if [ -f /etc/exports ]
+then
+        echo Maak een backup van huidige /etc/exports
+        cp /etc/exports /etc/exports-$datumtijd
+else
+        echo Geen /etc/exports aanwezig, geen backup gemaakt.
+fi
+
+touch $fstabex
+echo "/$vglnaam 172.30.54.0/26(rw,sync,fsid=$t)" >$xprts
+
+for i in $filesystemen
+do
+echo ---
+t=$((t+1)) #teller van 0 tot laatste $i
+
+lvlnaam=$(echo lvl"_"$vglnaam"_"$i)
+lvlomvang=$(eval echo '$'vg_$i) # Bij percentage inclusief VG.
+echo Maken logical volume $lvlnaam
+lvcreate -l "$lvlomvang" -n $lvlnaam $volgroepnaam >/dev/null
+if [ $? = 0 ]
+then
+        echo Logicalvolume $lvlnaam gemaakt en omvat $lvlomvang van $volgroepnaam
+else
+        echo Fout bij toevoegen $lvlnaam aan volumegroup $volgroepnaam
+        exit
+fi
+
+if [ ! -d /$vglnaam/$i ]
+then
+        echo Aanmaken /$vglnaam/$i
+        mkdir /$vglnaam/$i
+        if [ $? = 0 ]
+        then
+                echo Mountpoint sub-directory /$vglnaam/$i is aangemaakt
+        else
+                echo !! Fout bij aanmaken directory /$vglnaam/$i
+        fi
+fi
+
+mkfs.xfs /dev/mapper/$volgroepnaam-$lvlnaam -f -q >/dev/null
 
 if [ $? = 0 ]
 then
-  echo NFS server is enabled en opgestart.
-  else
-  echo
-  echo Fout bij instellen NFS. Installeer eerst NFS packages:
-  echo dnf install nfs-utils -y
-  echo dnf install nfs4-acl-tools -y
-
-                echo 
-
-                exit 
-
-        fi 
-
-fi 
-
- 
-
- 
-
-if [ ! -e $1 ]; then 
-
-echo 
-
-echo Apparaat $devicepad bestaat niet. Het laatste apparaat is /dev/$lastdisk. 
-
-echo Hieronder vind je het overzicht: 
-
-lsblk | grep disk 
-
-echo 
-
-echo Als de drive niet zichtbaar is, copy paste dan onderstaand en anders herstarten: 
-
-echo 'for BUS in $(ls -1 /sys/bus/scsi/devices/ | grep "^[0-9]") ; do echo -n "BUS: $BUS : " ; echo 1 > /sys/bus/scsi/devices/$BUS/rescan ;echo "...gescand!" ; done' 
-
-echo 
-
-exit 
-
-fi 
-
- 
-
- 
-
-######################## 
-
-pvcreate $devicepad >/dev/null 
-
-######################## 
-
-echo --- 
-
-if [ $? = 0 ] 
-
-then 
-
-        echo Apparaat $devicepad is toegevoegd als blockdevice aan LVM 
-
-else 
-
-        echo Fout bij toevoegen $devicepad aan LVM 
-
-        exit 
-
-fi 
-
- 
-
-#################################### 
-
-# Aanmaken volumegroup en mountpoint 
-
-#################################### 
-
-echo --- 
-
-vglnaam=$(echo nfs) 
-
-volgroepnaam=$(echo vgl_$vglnaam) 
-
- 
-
-vgcreate $volgroepnaam $devicepad >/dev/null 
-
-if [ $? = 0 ] 
-
-then 
-
-        echo Volumegroup $volgroepnaam aangemaakt met $devicepad als fysieke disk 
-
-else 
-
-        echo Fout bij toevoegen $devicepad aan volumegroup $volgroepnaam 
-
-        exit 
-
-fi 
-
- 
-
-mkdir /$vglnaam 
-
-if [ $? = 0 ] 
-
-then 
-
-        echo Mountpoint root directory /$vglnaam is aangemaakt 
-
-else 
-
-        echo Fout bij het aanmaken van directory /$vglnaam 
-
-fi 
-
-## Backup fstab 
-
-cp -p /etc/fstab /etc/fstab-$datumtijd 
-
- 
-
-################################################### 
-
-# Loop maakt filesystemen en subdirs mountpoint aan 
-
-################################################### 
-
-filesystemen=$(echo rear config homedirs install) 
-
-vg_rear=$(echo 20%VG) 
-
-vg_config=$(echo 20%VG) 
-
-vg_homedirs=$(echo 10%VG) 
-
-vg_install=$(echo 10%VG) 
-
-xprts=$(echo /etc/exports) 
-
-fstabex=$(echo /install/fstab-clientuse) #Dit is voor de fstab van NFS clients 
-
-nfsclientfstab=$(echo /nfs/install/nfsclient/fstab-addon) #Voor NFS clients 
-
-t=0 
-
- 
-
-if [ -f /etc/exports ] 
-
-then 
-
-        echo Maak een backup van huidige /etc/exports 
-
-        cp /etc/exports /etc/exports-$datumtijd 
-
-else 
-
-        echo Geen /etc/exports aanwezig, geen backup gemaakt. 
-
-fi 
-
- 
-
-touch $fstabex 
-
-echo "/$vglnaam 172.30.54.0/26(rw,sync,fsid=$t)" >$xprts 
-
- 
-
-for i in $filesystemen 
-
-do 
-
-echo --- 
-
-t=$((t+1)) #teller van 0 tot laatste $i 
-
- 
-
-lvlnaam=$(echo lvl"_"$vglnaam"_"$i) 
-
-lvlomvang=$(eval echo '$'vg_$i) # Bij percentage inclusief VG. 
-
-echo Maken logical volume $lvlnaam 
-
-lvcreate -l "$lvlomvang" -n $lvlnaam $volgroepnaam >/dev/null 
-
-if [ $? = 0 ] 
-
-then 
-
-        echo Logicalvolume $lvlnaam gemaakt en omvat $lvlomvang van $volgroepnaam 
-
-else 
-
-        echo Fout bij toevoegen $lvlnaam aan volumegroup $volgroepnaam 
-
-        exit 
-
-fi 
-
- 
-
-if [ ! -d /$vglnaam/$i ] 
-
-then 
-
-        echo Aanmaken /$vglnaam/$i 
-
-        mkdir /$vglnaam/$i 
-
-        if [ $? = 0 ] 
-
-        then 
-
-                echo Mountpoint sub-directory /$vglnaam/$i is aangemaakt 
-
-        else 
-
-                echo !! Fout bij aanmaken directory /$vglnaam/$i 
-
-        fi 
-
-fi 
-
- 
-
-mkfs.xfs /dev/mapper/$volgroepnaam-$lvlnaam -f -q >/dev/null 
-
- 
-
-if [ $? = 0 ] 
-
-then 
-
-        echo Filesysteem aangemaakt op $lvlnaam van volumegroup $volgroepnaam 
-
-else 
-
-        echo !! Fout bij aanmaken van filesysteem op $lvlnaam 
-
-fi 
-
- 
-
-echo "/dev/mapper/$volgroepnaam-$lvlnaam /$vglnaam/$i xfs defaults 0 0" >>/etc/fstab 
-
-echo "/$vglnaam/$i 172.30.54.0/26(rw,sync,fsid=$t)" >>$xprts 
-
-echo "$HOSTNAME.$domein:/$vglnaam/$i    /$vglnaam/$i    nfs     defaults        0 0" >>$fstabex 
-
-echo "/$vglnaam.$domein/$i 172.30.54.0/26(rw,sync,fsid=$t)" 
-
-done 
-
- 
-
-echo 
-
-mount -a 
-
-echo 
-
-mkdir /nfs/install/nfsclient 
-
-if [ ! -d $nfsclientfstab ] 
-
-then 
-
-        cp $fstabex $nfsclientfstab 
-
-else 
-
-        mv $nfsclientfstab $nfsclientfstab-$datumtijd 
-
-        cp $fstabex $nfsclientfstab 
-
-fi 
-
- 
-
-echo Onderstaand is gekopieerd van $fstabex naar $nfsclientfstab 
-
-echo Het moet worden toegevoegd aan de fstab van NFS clients: 
-
-cat $fstabex 
-
-echo 
-
-echo Inhoud /etc/exports: 
-
-cat /etc/exports 
-
-echo 
-
-echo Aangemaakte mounts: 
-
-df -hTP | grep vgl_nfs-lvl_nfs 
-
-echo 
-
-echo NFS installatie is afgerond. 
-
-echo 
+        echo Filesysteem aangemaakt op $lvlnaam van volumegroup $volgroepnaam
+else
+        echo !! Fout bij aanmaken van filesysteem op $lvlnaam
+fi
+
+echo "/dev/mapper/$volgroepnaam-$lvlnaam /$vglnaam/$i xfs defaults 0 0" >>/etc/fstab
+echo "/$vglnaam/$i 172.30.54.0/26(rw,sync,fsid=$t)" >>$xprts
+echo "$HOSTNAME.$domein:/$vglnaam/$i    /$vglnaam/$i    nfs     defaults        0 0" >>$fstabex
+echo "/$vglnaam.$domein/$i 172.30.54.0/26(rw,sync,fsid=$t)"
+done
+
+echo
+mount -a
+echo
+mkdir /nfs/install/nfsclient
+if [ ! -d $nfsclientfstab ]
+then
+        cp $fstabex $nfsclientfstab
+else
+        mv $nfsclientfstab $nfsclientfstab-$datumtijd
+        cp $fstabex $nfsclientfstab
+fi
+
+echo Onderstaand is gekopieerd van $fstabex naar $nfsclientfstab
+echo Het moet worden toegevoegd aan de fstab van NFS clients:
+cat $fstabex
+echo
+echo Inhoud /etc/exports:
+cat /etc/exports
+echo
+echo Aangemaakte mounts:
+df -hTP | grep vgl_nfs-lvl_nfs
+echo
+echo NFS installatie is afgerond.
+echo
