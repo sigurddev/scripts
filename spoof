@@ -1,0 +1,22 @@
+#!/bin/bash
+linuxver=$(uname -a)
+spoofdomein=$(echo example.com)
+targetdomein=$(echo outlook.com)
+from=$(echo info)
+recipient=$(echo sigurd.de.vries)
+subject=$(echo SPF test vanuit XS4ALL Linux shell)
+body=$(echo Dit bericht is niet afkomstig van $spoofdomein. Het is een zgn spoof bericht vanuit dit domein, verzonden uit naam van $from [$from@$spoofdomein], gericht aan $recipient [$recipient@$targetdomein]. De zendende mailserver staat niet in SPF vermeld dus dit bericht komt mogelijk in een SPAM-folder of quarantaine. [ $linuxver ] - Groet, Sigurd)
+echo
+echo ==================================================
+echo Spoof domein.: $spoofdomein
+echo Target domein: $targetdomein
+echo ==================================================
+echo From: $from  [ $from@$spoofdomein ]
+echo Recp: $recipient [ $recipient@$targetdomein ]
+echo Subj: $subject
+echo Body: $body
+echo ==================================================
+echo
+
+#Verzenden van de mail
+#echo $body | mailx -s "$subject" -r $from@$spoofdomein $recipient@$targetdomein
